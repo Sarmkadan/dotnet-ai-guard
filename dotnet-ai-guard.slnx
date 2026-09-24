@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/dotnet-ai-guard/dotnet-ai-guard.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/dotnet-ai-guard.Tests/dotnet-ai-guard.Tests.csproj" />
+  </Folder>
+</Solution>
