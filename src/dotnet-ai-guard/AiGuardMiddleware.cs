@@ -32,6 +32,9 @@ public sealed partial class AiGuardMiddleware
     [LoggerMessage(Level = LogLevel.Information, Message = "Redacted {Count} PII entities from request body")]
     private partial void LogPiiRedacted(int count);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Redacted {Count} PII entities from response body")]
+    private partial void LogResponsePiiRedacted(int count);
+
     /// <summary>
     /// Creates a new instance of the middleware.
     /// </summary>
@@ -160,6 +163,67 @@ public sealed partial class AiGuardMiddleware
         context.Request.Body = new MemoryStream(newBody);
         context.Request.ContentLength = newBody.Length;
 
-        await _next(context);
+        if (opts.RedactResponses && opts.RedactCategories != PiiCategory.None)
+        {
+            await InvokeWithResponseRedactionAsync(context, opts);
+        }
+        else
+        {
+            await _next(context);
+        }
+    }
+
+    /// <summary>
+    /// Invokes the next middleware while intercepting the response body to redact PII.
+    /// When the response Content-Type starts with <c>application/json</c> or <c>text/</c>,
+    /// the body is read as UTF-8, redacted via <see cref="IPiiRedactor"/>, and rewritten
+    /// with an updated Content-Length. Other content types are copied through unchanged.
+    /// </summary>
+    private async Task InvokeWithResponseRedactionAsync(HttpContext context, AiGuardOptions options)
+    {
+        var originalBody = context.Response.Body;
+        using var buffer = new MemoryStream();
+        context.Response.Body = buffer;
+
+        try
+        {
+            await _next(context);
+
+            buffer.Position = 0;
+
+            var contentType = context.Response.ContentType;
+            var shouldRedact = contentType is not null &&
+                (contentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase) ||
+                 contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase));
+
+            if (shouldRedact)
+            {
+                var responseText = await new StreamReader(buffer, Encoding.UTF8).ReadToEndAsync();
+                var redaction = await _redactor.RedactAsync(responseText, context.RequestAborted);
+
+                if (redaction.HasRedactions)
+                {
+                    LogResponsePiiRedacted(redaction.Entities.Count);
+                    var redactedBytes = Encoding.UTF8.GetBytes(redaction.RedactedText);
+                    context.Response.ContentLength = redactedBytes.Length;
+                    await originalBody.WriteAsync(redactedBytes);
+                }
+                else
+                {
+                    context.Response.ContentLength = buffer.Length;
+                    buffer.Position = 0;
+                    await buffer.CopyToAsync(originalBody);
+                }
+            }
+            else
+            {
+                buffer.Position = 0;
+                await buffer.CopyToAsync(originalBody);
+            }
+        }
+        finally
+        {
+            context.Response.Body = originalBody;
+        }
     }
 }
