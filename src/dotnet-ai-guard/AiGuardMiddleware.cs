@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -8,7 +9,7 @@ namespace AiGuard;
 /// ASP.NET Core middleware that inspects incoming request bodies for prompt injection
 /// and redacts PII before the request reaches downstream handlers.
 /// </summary>
-public sealed class AiGuardMiddleware
+public sealed partial class AiGuardMiddleware
 {
     /// <summary>Key under which the <see cref="InjectionVerdict"/> is stored in <see cref="HttpContext.Items"/>.</summary>
     public const string VerdictItemKey = "AiGuard.InjectionVerdict";
@@ -22,14 +23,18 @@ public sealed class AiGuardMiddleware
     private readonly IOptionsMonitor<AiGuardOptions> _options;
     private readonly ILogger<AiGuardMiddleware> _logger;
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Request body exceeds MaxBodyBytes ({MaxBodyBytes}), passing through unmodified")]
+    private partial void LogBodyTooLarge(long maxBodyBytes);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Prompt injection detected (score={Score}): {Signals}")]
+    private partial void LogInjectionDetected(double score, string signals);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Redacted {Count} PII entities from request body")]
+    private partial void LogPiiRedacted(int count);
+
     /// <summary>
     /// Creates a new instance of the middleware.
     /// </summary>
-    /// <param name="next">Next delegate in the pipeline.</param>
-    /// <param name="detector">Prompt-injection detector.</param>
-    /// <param name="redactor">PII redactor.</param>
-    /// <param name="options">Live options.</param>
-    /// <param name="logger">Logger.</param>
     public AiGuardMiddleware(
         RequestDelegate next,
         IPromptInjectionDetector detector,
@@ -48,9 +53,113 @@ public sealed class AiGuardMiddleware
     /// Processes the request: buffers the body, runs detection and redaction, then either blocks,
     /// flags or rewrites the request according to <see cref="AiGuardOptions.OnInjection"/>.
     /// </summary>
-    /// <param name="context">The current HTTP context.</param>
-    public Task InvokeAsync(HttpContext context)
+    public async Task InvokeAsync(HttpContext context)
     {
-        throw new NotImplementedException();
+        var opts = _options.CurrentValue;
+
+        // Only process requests whose method has a body (POST, PUT, PATCH)
+        if (!HttpMethods.IsPost(context.Request.Method) &&
+            !HttpMethods.IsPut(context.Request.Method) &&
+            !HttpMethods.IsPatch(context.Request.Method))
+        {
+            await _next(context);
+            return;
+        }
+
+        // PathPrefixes filter: if configured, only apply to matching paths
+        if (opts.PathPrefixes.Count > 0)
+        {
+            var path = context.Request.Path.Value ?? string.Empty;
+            var matches = false;
+            foreach (var prefix in opts.PathPrefixes)
+            {
+                if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    matches = true;
+                    break;
+                }
+            }
+
+            if (!matches)
+            {
+                await _next(context);
+                return;
+            }
+        }
+
+        // Buffer the request body
+        context.Request.EnableBuffering();
+        using var reader = new StreamReader(context.Request.Body, Encoding.UTF8, leaveOpen: true);
+        var body = await reader.ReadToEndAsync();
+
+        if (string.IsNullOrEmpty(body))
+        {
+            context.Request.Body.Position = 0;
+            await _next(context);
+            return;
+        }
+
+        // Check body size limit
+        if (Encoding.UTF8.GetByteCount(body) > opts.MaxBodyBytes)
+        {
+            LogBodyTooLarge(opts.MaxBodyBytes);
+            context.Request.Body.Position = 0;
+            await _next(context);
+            return;
+        }
+
+        // Prompt injection detection
+        var verdict = await _detector.DetectAsync(body, context.RequestAborted);
+
+        if (verdict.IsInjection)
+        {
+            LogInjectionDetected(verdict.Score, string.Join(", ", verdict.Signals.Select(s => s.RuleId)));
+
+            switch (opts.OnInjection)
+            {
+                case GuardAction.Block:
+                    context.Response.StatusCode = opts.BlockedStatusCode;
+                    context.Response.ContentType = "application/json";
+                    await context.Response.WriteAsync("{\"error\":\"prompt_injection_detected\"}");
+                    return;
+
+                case GuardAction.Flag:
+                    context.Items[VerdictItemKey] = verdict;
+                    break;
+
+                case GuardAction.Sanitize:
+                    // Strip matched spans from body (from end to start to preserve indices)
+                    var sb = new StringBuilder(body);
+                    foreach (var signal in verdict.Signals.OrderByDescending(s => s.Span?.Start ?? 0))
+                    {
+                        if (signal.Span is { } span)
+                        {
+                            sb.Remove(span.Start, span.Length);
+                        }
+                    }
+                    body = sb.ToString();
+                    context.Items[VerdictItemKey] = verdict;
+                    break;
+            }
+        }
+
+        // PII redaction
+        if (opts.RedactCategories != PiiCategory.None)
+        {
+            var redaction = await _redactor.RedactAsync(body, context.RequestAborted);
+            if (redaction.HasRedactions)
+            {
+                body = redaction.RedactedText;
+                context.Items[RedactionItemKey] = redaction;
+                LogPiiRedacted(redaction.Entities.Count);
+            }
+        }
+
+        // Replace the request body with the processed version
+        var newBody = Encoding.UTF8.GetBytes(body);
+        context.Request.Body = new MemoryStream(newBody);
+        context.Request.ContentLength = newBody.Length;
+
+        await _next(context);
     }
 }
