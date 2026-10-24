@@ -16,11 +16,20 @@ public sealed class RuleBasedPromptInjectionDetector : IPromptInjectionDetector
     /// Creates a new detector.
     /// </summary>
     /// <param name="options">Options monitor; <see cref="AiGuardOptions.InjectionThreshold"/> is read on every scan.</param>
-    /// <param name="rules">Rules to run. Defaults to <see cref="DefaultInjectionRules.All"/>.</param>
+    /// <param name="rules">Rules to run. Defaults to <see cref="DefaultInjectionRules.All"/>. Must not be empty when provided.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="rules"/> is empty.</exception>
     public RuleBasedPromptInjectionDetector(IOptionsMonitor<AiGuardOptions> options, IReadOnlyList<InjectionRule>? rules = null)
     {
-        _options = options ?? throw new ArgumentNullException(nameof(options));
+        ArgumentNullException.ThrowIfNull(options);
+
+        _options = options;
         _rules = rules ?? DefaultInjectionRules.All;
+
+        if (_rules.Count == 0)
+        {
+            throw new ArgumentException("At least one injection rule is required.", nameof(rules));
+        }
     }
 
     /// <summary>
@@ -35,6 +44,7 @@ public sealed class RuleBasedPromptInjectionDetector : IPromptInjectionDetector
     /// <param name="text">The text to scan. Must not be <see langword="null"/>.</param>
     /// <param name="cancellationToken">Cancellation token, checked once before scanning.</param>
     /// <returns>The verdict. Its signals' spans index into the normalized text.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> is <see langword="null"/>. Thrown synchronously, not via the returned task.</exception>
     public ValueTask<InjectionVerdict> DetectAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
