@@ -23,18 +23,30 @@ public sealed class RuleBasedPromptInjectionDetector : IPromptInjectionDetector
         _rules = rules ?? DefaultInjectionRules.All;
     }
 
-    /// <inheritdoc />
+    /// <summary>
+    /// Scans <paramref name="text"/> for injection signals.
+    /// </summary>
+    /// <remarks>
+    /// The text is first passed through <see cref="InjectionTextNormalizer.Normalize"/>, and the rules run
+    /// over the normalized copy. Signal spans (<see cref="InjectionSignal.Span"/>) are therefore relative to the
+    /// normalized text, not to <paramref name="text"/>; their positions can differ when the input contains
+    /// zero-width characters, homoglyphs, compatibility forms or runs of whitespace.
+    /// </remarks>
+    /// <param name="text">The text to scan. Must not be <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancellation token, checked once before scanning.</param>
+    /// <returns>The verdict. Its signals' spans index into the normalized text.</returns>
     public ValueTask<InjectionVerdict> DetectAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var normalized = InjectionTextNormalizer.Normalize(text);
         var signals = new List<InjectionSignal>();
         var complement = 1d;
 
         foreach (var rule in _rules)
         {
-            foreach (var signal in rule.Match(text))
+            foreach (var signal in rule.Match(normalized))
             {
                 signals.Add(signal);
                 complement *= 1d - signal.Weight;

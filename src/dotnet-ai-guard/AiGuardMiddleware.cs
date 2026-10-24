@@ -131,8 +131,9 @@ public sealed partial class AiGuardMiddleware
                     break;
 
                 case GuardAction.Sanitize:
-                    // Strip matched spans from body (from end to start to preserve indices)
-                    var sb = new StringBuilder(body);
+                    // Spans are relative to the normalized text, so strip them from that same text
+                    // (from end to start to preserve indices).
+                    var sb = new StringBuilder(InjectionTextNormalizer.Normalize(body));
                     foreach (var signal in verdict.Signals.OrderByDescending(s => s.Span?.Start ?? 0))
                     {
                         if (signal.Span is { } span)
