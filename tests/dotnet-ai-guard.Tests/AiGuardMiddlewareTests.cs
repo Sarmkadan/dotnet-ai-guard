@@ -28,7 +28,7 @@ public sealed class AiGuardMiddlewareTests
         return new AiGuardMiddleware(
             next,
             new RuleBasedPromptInjectionDetector(monitor),
-            new RegexPiiRedactor(opts.RedactCategories),
+            new RegexPiiRedactor(monitor),
             monitor,
             NullLogger<AiGuardMiddleware>.Instance);
     }
