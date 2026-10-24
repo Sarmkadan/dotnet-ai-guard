@@ -19,15 +19,24 @@ public sealed class RegexPiiRedactor : IPiiRedactor
     /// </summary>
     /// <param name="options">Source of <see cref="AiGuardOptions.RedactCategories"/>.</param>
     /// <param name="patterns">Recognizers to run. Defaults to <see cref="DefaultPiiPatterns.All"/>.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="patterns"/> is empty.</exception>
     public RegexPiiRedactor(IOptionsMonitor<AiGuardOptions> options, IReadOnlyList<PiiPattern>? patterns = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        patterns ??= DefaultPiiPatterns.All;
+        if (patterns.Count == 0)
+        {
+            throw new ArgumentException("At least one PII pattern is required.", nameof(patterns));
+        }
+
         _options = options;
-        _patterns = patterns ?? DefaultPiiPatterns.All;
+        _patterns = patterns;
     }
 
     /// <inheritdoc />
+    /// <exception cref="ArgumentNullException"><paramref name="text"/> is <see langword="null"/>. Thrown synchronously, not via the returned task.</exception>
     public ValueTask<RedactionResult> RedactAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);

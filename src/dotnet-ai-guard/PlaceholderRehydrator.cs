@@ -24,6 +24,8 @@ public static class PlaceholderRehydrator
     /// The input with known placeholders replaced. Placeholders that are not in <paramref name="result"/>
     /// and any other bracketed tokens are left untouched.
     /// </returns>
+    /// <exception cref="ArgumentNullException">Any parameter is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">An entity span in <paramref name="result"/> falls outside <paramref name="originalText"/>.</exception>
     public static string Rehydrate(string redactedOrLlmOutput, string originalText, RedactionResult result)
     {
         ArgumentNullException.ThrowIfNull(redactedOrLlmOutput);
@@ -33,7 +35,14 @@ public static class PlaceholderRehydrator
         var spans = new Dictionary<string, TextSpan>(StringComparer.Ordinal);
         foreach (var entity in result.Entities)
         {
-            spans.TryAdd(entity.Placeholder, entity.Span);
+            var span = entity.Span;
+            if (span.Start < 0 || span.Length < 0 || span.Start > originalText.Length - span.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(result), span,
+                    "Entity span must lie within the original text.");
+            }
+
+            spans.TryAdd(entity.Placeholder, span);
         }
 
         return _placeholderPattern.Replace(redactedOrLlmOutput, match =>

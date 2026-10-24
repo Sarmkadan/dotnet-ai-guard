@@ -20,14 +20,13 @@ public sealed class PiiPattern
     /// <see cref="RegexOptions.Compiled"/> and a 250 ms match timeout.</param>
     /// <param name="validator">Optional predicate applied to each regex match value; matches for which it returns
     /// <see langword="false"/> are discarded.</param>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="category"/> is not exactly one flag.</exception>
+    /// <exception cref="ArgumentException"><paramref name="category"/> is zero or has more than one flag set.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="pattern"/> is <see langword="null"/>.</exception>
     public PiiPattern(PiiCategory category, string pattern, Func<string, bool>? validator = null)
     {
         if (BitOperations.PopCount((uint)category) != 1)
         {
-            throw new ArgumentOutOfRangeException(nameof(category), category,
-                "PII pattern must target exactly one PiiCategory flag.");
+            throw new ArgumentException("PII pattern must target exactly one PiiCategory flag.", nameof(category));
         }
 
         ArgumentNullException.ThrowIfNull(pattern);
