@@ -24,11 +24,12 @@ public sealed class AiGuardMiddlewareTests
         AiGuardOptions? options = null)
     {
         var opts = options ?? new AiGuardOptions();
+        var monitor = new TestOptionsMonitor<AiGuardOptions>(opts);
         return new AiGuardMiddleware(
             next,
-            new RuleBasedPromptInjectionDetector(opts.InjectionThreshold),
+            new RuleBasedPromptInjectionDetector(monitor),
             new RegexPiiRedactor(opts.RedactCategories),
-            new TestOptionsMonitor<AiGuardOptions>(opts),
+            monitor,
             NullLogger<AiGuardMiddleware>.Instance);
     }
 

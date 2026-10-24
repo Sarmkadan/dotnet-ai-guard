@@ -1,56 +1,55 @@
-using System.Text.RegularExpressions;
+using Microsoft.Extensions.Options;
 
 namespace AiGuard;
 
 /// <summary>
-/// Detects prompt injection attempts using a set of regex-based rules.
-/// Each matched rule contributes a weighted signal; the total score is clamped to [0, 1].
+/// Detects prompt injection by running a set of <see cref="InjectionRule"/>s over the text.
+/// Every match contributes a signal; the signals are combined with a noisy-OR so that independent
+/// weak indicators add up without the score ever exceeding 1.
 /// </summary>
 public sealed class RuleBasedPromptInjectionDetector : IPromptInjectionDetector
 {
-    private static readonly List<(string RuleId, string Description, Regex Pattern, double Weight)> Rules = new()
-    {
-        ("INJ-001", "Instruction override attempt", new Regex(@"ignore\s+(all\s+)?previous\s+instructions", RegexOptions.IgnoreCase | RegexOptions.Compiled), 0.9),
-        ("INJ-002", "Role hijacking", new Regex(@"you\s+are\s+now\s+", RegexOptions.IgnoreCase | RegexOptions.Compiled), 0.8),
-        ("INJ-003", "System prompt exfiltration", new Regex(@"(reveal|show|print|output)\s+(your\s+)?(system\s+prompt|instructions)", RegexOptions.IgnoreCase | RegexOptions.Compiled), 0.85),
-        ("INJ-004", "Delimiter smuggling", new Regex(@"<\|?(system|im_start|im_end)\|?>", RegexOptions.IgnoreCase | RegexOptions.Compiled), 0.75),
-        ("INJ-005", "DAN/jailbreak pattern", new Regex(@"(do\s+anything\s+now|DAN\s+mode|act\s+as\s+if\s+you\s+have\s+no\s+restrictions)", RegexOptions.IgnoreCase | RegexOptions.Compiled), 0.85),
-        ("INJ-006", "Forget instructions", new Regex(@"forget\s+(all\s+)?(your\s+)?(previous\s+)?instructions", RegexOptions.IgnoreCase | RegexOptions.Compiled), 0.9),
-    };
-
-    private readonly double _threshold;
+    private readonly IOptionsMonitor<AiGuardOptions> _options;
+    private readonly IReadOnlyList<InjectionRule> _rules;
 
     /// <summary>
-    /// Creates a new detector with the given injection threshold.
+    /// Creates a new detector.
     /// </summary>
-    /// <param name="threshold">Score at or above which input is considered an injection. Default 0.7.</param>
-    public RuleBasedPromptInjectionDetector(double threshold = 0.7)
+    /// <param name="options">Options monitor; <see cref="AiGuardOptions.InjectionThreshold"/> is read on every scan.</param>
+    /// <param name="rules">Rules to run. Defaults to <see cref="DefaultInjectionRules.All"/>.</param>
+    public RuleBasedPromptInjectionDetector(IOptionsMonitor<AiGuardOptions> options, IReadOnlyList<InjectionRule>? rules = null)
     {
-        _threshold = threshold;
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+        _rules = rules ?? DefaultInjectionRules.All;
     }
 
     /// <inheritdoc />
     public ValueTask<InjectionVerdict> DetectAsync(string text, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(text);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var signals = new List<InjectionSignal>();
-        double totalScore = 0;
+        var complement = 1d;
 
-        foreach (var (ruleId, description, pattern, weight) in Rules)
+        foreach (var rule in _rules)
         {
-            var match = pattern.Match(text);
-            if (match.Success)
+            foreach (var signal in rule.Match(text))
             {
-                signals.Add(new InjectionSignal(ruleId, description, weight,
-                    new TextSpan(match.Index, match.Length)));
-                totalScore += weight;
+                signals.Add(signal);
+                complement *= 1d - signal.Weight;
             }
         }
 
-        totalScore = Math.Min(totalScore, 1.0);
-        var isInjection = totalScore >= _threshold;
+        if (signals.Count == 0)
+        {
+            return ValueTask.FromResult(InjectionVerdict.Clean);
+        }
 
-        return ValueTask.FromResult(new InjectionVerdict(isInjection, totalScore, signals));
+        // Noisy-OR: 1 - Π(1 - w). Clamped in case of floating-point drift.
+        var score = Math.Clamp(1d - complement, 0d, 1d);
+        var isInjection = score >= _options.CurrentValue.InjectionThreshold;
+
+        return ValueTask.FromResult(new InjectionVerdict(isInjection, score, signals));
     }
 }
