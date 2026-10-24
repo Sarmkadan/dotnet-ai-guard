@@ -16,20 +16,16 @@ public sealed class RuleBasedPromptInjectionDetector : IPromptInjectionDetector
     /// Creates a new detector.
     /// </summary>
     /// <param name="options">Options monitor; <see cref="AiGuardOptions.InjectionThreshold"/> is read on every scan.</param>
-    /// <param name="rules">Rules to run. Defaults to <see cref="DefaultInjectionRules.All"/>. Must not be empty when provided.</param>
+    /// <param name="extraRules">Additional rules run after <see cref="DefaultInjectionRules.All"/>. Optional.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="rules"/> is empty.</exception>
-    public RuleBasedPromptInjectionDetector(IOptionsMonitor<AiGuardOptions> options, IReadOnlyList<InjectionRule>? rules = null)
+    public RuleBasedPromptInjectionDetector(IOptionsMonitor<AiGuardOptions> options, IEnumerable<InjectionRule>? extraRules = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         _options = options;
-        _rules = rules ?? DefaultInjectionRules.All;
-
-        if (_rules.Count == 0)
-        {
-            throw new ArgumentException("At least one injection rule is required.", nameof(rules));
-        }
+        _rules = extraRules is null
+            ? DefaultInjectionRules.All
+            : [.. DefaultInjectionRules.All, .. extraRules];
     }
 
     /// <summary>

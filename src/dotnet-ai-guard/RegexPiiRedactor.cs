@@ -18,21 +18,16 @@ public sealed class RegexPiiRedactor : IPiiRedactor
     /// Creates a new redactor.
     /// </summary>
     /// <param name="options">Source of <see cref="AiGuardOptions.RedactCategories"/>.</param>
-    /// <param name="patterns">Recognizers to run. Defaults to <see cref="DefaultPiiPatterns.All"/>.</param>
+    /// <param name="extraPatterns">Additional recognizers run after <see cref="DefaultPiiPatterns.All"/>. Optional.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="patterns"/> is empty.</exception>
-    public RegexPiiRedactor(IOptionsMonitor<AiGuardOptions> options, IReadOnlyList<PiiPattern>? patterns = null)
+    public RegexPiiRedactor(IOptionsMonitor<AiGuardOptions> options, IEnumerable<PiiPattern>? extraPatterns = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        patterns ??= DefaultPiiPatterns.All;
-        if (patterns.Count == 0)
-        {
-            throw new ArgumentException("At least one PII pattern is required.", nameof(patterns));
-        }
-
         _options = options;
-        _patterns = patterns;
+        _patterns = extraPatterns is null
+            ? DefaultPiiPatterns.All
+            : [.. DefaultPiiPatterns.All, .. extraPatterns];
     }
 
     /// <inheritdoc />

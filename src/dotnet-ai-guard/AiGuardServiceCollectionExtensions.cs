@@ -17,8 +17,8 @@ public static class AiGuardServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Optional delegate to tune <see cref="AiGuardOptions"/>.</param>
-    /// <returns>The same <paramref name="services"/> for chaining.</returns>
-    public static IServiceCollection AddAiGuard(this IServiceCollection services, Action<AiGuardOptions>? configure = null)
+    /// <returns>A <see cref="AiGuardBuilder"/> for further configuration and chaining.</returns>
+    public static AiGuardBuilder AddAiGuard(this IServiceCollection services, Action<AiGuardOptions>? configure = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -32,7 +32,7 @@ public static class AiGuardServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<AiGuardOptions>, AiGuardOptionsValidator>();
         services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
         services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
-        return services;
+        return new AiGuardBuilder(services);
     }
 
     /// <summary>
@@ -40,8 +40,8 @@ public static class AiGuardServiceCollectionExtensions
     /// </summary>
     /// <param name="services">The service collection.</param>
     /// <param name="configuration">Configuration section (typically <c>AiGuard</c>).</param>
-    /// <returns>The same <paramref name="services"/> for chaining.</returns>
-    public static IServiceCollection AddAiGuard(this IServiceCollection services, IConfiguration configuration)
+    /// <returns>A <see cref="AiGuardBuilder"/> for further configuration and chaining.</returns>
+    public static AiGuardBuilder AddAiGuard(this IServiceCollection services, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -50,7 +50,7 @@ public static class AiGuardServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<AiGuardOptions>, AiGuardOptionsValidator>();
         services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
         services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
-        return services;
+        return new AiGuardBuilder(services);
     }
 
     /// <summary>

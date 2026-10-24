@@ -25,7 +25,7 @@ public class AiGuardServiceCollectionExtensionsTests
     [Fact]
     public void AddAiGuard_Defaults_ResolvesRuleBasedDetector()
     {
-        using var provider = new ServiceCollection().AddLogging().AddAiGuard().BuildServiceProvider();
+        using var provider = new ServiceCollection().AddLogging().AddAiGuard().Services.BuildServiceProvider();
 
         Assert.IsType<RuleBasedPromptInjectionDetector>(provider.GetRequiredService<IPromptInjectionDetector>());
     }
@@ -33,7 +33,7 @@ public class AiGuardServiceCollectionExtensionsTests
     [Fact]
     public void AddAiGuard_Defaults_ResolvesRegexRedactor()
     {
-        using var provider = new ServiceCollection().AddLogging().AddAiGuard().BuildServiceProvider();
+        using var provider = new ServiceCollection().AddLogging().AddAiGuard().Services.BuildServiceProvider();
 
         Assert.IsType<RegexPiiRedactor>(provider.GetRequiredService<IPiiRedactor>());
     }
@@ -44,6 +44,7 @@ public class AiGuardServiceCollectionExtensionsTests
         using var provider = new ServiceCollection()
             .AddLogging()
             .AddAiGuard(o => o.InjectionThreshold = 0.5)
+            .Services
             .BuildServiceProvider();
 
         Assert.Equal(0.5, provider.GetRequiredService<IOptions<AiGuardOptions>>().Value.InjectionThreshold);
@@ -55,6 +56,7 @@ public class AiGuardServiceCollectionExtensionsTests
         using var provider = new ServiceCollection()
             .AddLogging()
             .AddAiGuard(CreateConfiguration())
+            .Services
             .BuildServiceProvider();
 
         Assert.Equal(0.9, provider.GetRequiredService<IOptions<AiGuardOptions>>().Value.InjectionThreshold);
@@ -66,6 +68,7 @@ public class AiGuardServiceCollectionExtensionsTests
         using var provider = new ServiceCollection()
             .AddLogging()
             .AddAiGuard(CreateConfiguration())
+            .Services
             .BuildServiceProvider();
 
         Assert.Equal(GuardAction.Flag, provider.GetRequiredService<IOptions<AiGuardOptions>>().Value.OnInjection);
@@ -77,6 +80,7 @@ public class AiGuardServiceCollectionExtensionsTests
         using var provider = new ServiceCollection()
             .AddLogging()
             .AddAiGuard(CreateConfiguration())
+            .Services
             .BuildServiceProvider();
 
         Assert.Equal(
@@ -92,6 +96,7 @@ public class AiGuardServiceCollectionExtensionsTests
             .AddLogging()
             .AddSingleton<IPiiRedactor>(custom)
             .AddAiGuard()
+            .Services
             .BuildServiceProvider();
 
         Assert.Same(custom, provider.GetRequiredService<IPiiRedactor>());

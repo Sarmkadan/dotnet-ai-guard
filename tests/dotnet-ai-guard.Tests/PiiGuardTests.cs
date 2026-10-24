@@ -18,20 +18,23 @@ public class PiiGuardTests
     }
 
     [Fact]
-    public void RegexPiiRedactorConstructor_EmptyPatterns_ThrowsArgumentException()
+    public async Task RegexPiiRedactorConstructor_EmptyExtraPatterns_KeepsDefaultPatterns()
     {
-        var ex = Assert.Throws<ArgumentException>("patterns",
-            () => new RegexPiiRedactor(CreateOptions(), Array.Empty<PiiPattern>()));
+        var redactor = new RegexPiiRedactor(CreateOptions(), Array.Empty<PiiPattern>());
 
-        Assert.Equal("patterns", ex.ParamName);
+        var result = await redactor.RedactAsync("Mail a@b.com now");
+
+        Assert.Equal("Mail [EMAIL_1] now", result.RedactedText);
     }
 
     [Fact]
-    public void RegexPiiRedactorConstructor_NullPatterns_UsesDefaultsWithoutThrowing()
+    public async Task RegexPiiRedactorConstructor_NullExtraPatterns_UsesDefaultsWithoutThrowing()
     {
-        var redactor = new RegexPiiRedactor(CreateOptions(), null);
+        var redactor = new RegexPiiRedactor(CreateOptions(), extraPatterns: null);
 
-        Assert.NotNull(redactor);
+        var result = await redactor.RedactAsync("Mail a@b.com now");
+
+        Assert.Equal("Mail [EMAIL_1] now", result.RedactedText);
     }
 
     [Fact]
