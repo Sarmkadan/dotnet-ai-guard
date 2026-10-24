@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
 
 namespace AiGuard;
 
@@ -27,6 +28,8 @@ public static class AiGuardServiceCollectionExtensions
             optionsBuilder.Configure(configure);
         }
 
+        optionsBuilder.ValidateOnStart();
+        services.AddSingleton<IValidateOptions<AiGuardOptions>, AiGuardOptionsValidator>();
         services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
         services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
         return services;
@@ -43,7 +46,8 @@ public static class AiGuardServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.AddOptions<AiGuardOptions>().Bind(configuration);
+        services.AddOptions<AiGuardOptions>().Bind(configuration).ValidateOnStart();
+        services.AddSingleton<IValidateOptions<AiGuardOptions>, AiGuardOptionsValidator>();
         services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
         services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
         return services;
