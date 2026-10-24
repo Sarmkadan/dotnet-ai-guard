@@ -56,7 +56,18 @@ public sealed partial class AiGuardMiddleware
     /// Processes the request: buffers the body, runs detection and redaction, then either blocks,
     /// flags or rewrites the request according to <see cref="AiGuardOptions.OnInjection"/>.
     /// </summary>
-    public async Task InvokeAsync(HttpContext context)
+    /// <param name="context">The current HTTP context.</param>
+    /// <returns>A task that completes when the request has been processed.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="context"/> is <see langword="null"/>.</exception>
+    public Task InvokeAsync(HttpContext context)
+    {
+        // Validate synchronously, before any await, so a null context throws at the call site.
+        ArgumentNullException.ThrowIfNull(context);
+
+        return InvokeCoreAsync(context);
+    }
+
+    private async Task InvokeCoreAsync(HttpContext context)
     {
         var opts = _options.CurrentValue;
 

@@ -19,6 +19,8 @@ public static class AiGuardServiceCollectionExtensions
     /// <returns>The same <paramref name="services"/> for chaining.</returns>
     public static IServiceCollection AddAiGuard(this IServiceCollection services, Action<AiGuardOptions>? configure = null)
     {
+        ArgumentNullException.ThrowIfNull(services);
+
         var optionsBuilder = services.AddOptions<AiGuardOptions>();
         if (configure is not null)
         {
@@ -38,6 +40,9 @@ public static class AiGuardServiceCollectionExtensions
     /// <returns>The same <paramref name="services"/> for chaining.</returns>
     public static IServiceCollection AddAiGuard(this IServiceCollection services, IConfiguration configuration)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(configuration);
+
         services.AddOptions<AiGuardOptions>().Bind(configuration);
         services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
         services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
@@ -52,6 +57,8 @@ public static class AiGuardServiceCollectionExtensions
     /// <returns>The same <paramref name="app"/> for chaining.</returns>
     public static IApplicationBuilder UseAiGuard(this IApplicationBuilder app)
     {
+        ArgumentNullException.ThrowIfNull(app);
+
         return app.UseMiddleware<AiGuardMiddleware>();
     }
 }
