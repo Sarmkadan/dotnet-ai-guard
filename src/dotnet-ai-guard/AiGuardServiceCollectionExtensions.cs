@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace AiGuard;
 
@@ -18,7 +19,15 @@ public static class AiGuardServiceCollectionExtensions
     /// <returns>The same <paramref name="services"/> for chaining.</returns>
     public static IServiceCollection AddAiGuard(this IServiceCollection services, Action<AiGuardOptions>? configure = null)
     {
-        throw new NotImplementedException();
+        var optionsBuilder = services.AddOptions<AiGuardOptions>();
+        if (configure is not null)
+        {
+            optionsBuilder.Configure(configure);
+        }
+
+        services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
+        services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
+        return services;
     }
 
     /// <summary>
@@ -29,7 +38,10 @@ public static class AiGuardServiceCollectionExtensions
     /// <returns>The same <paramref name="services"/> for chaining.</returns>
     public static IServiceCollection AddAiGuard(this IServiceCollection services, IConfiguration configuration)
     {
-        throw new NotImplementedException();
+        services.AddOptions<AiGuardOptions>().Bind(configuration);
+        services.TryAddSingleton<IPromptInjectionDetector, RuleBasedPromptInjectionDetector>();
+        services.TryAddSingleton<IPiiRedactor, RegexPiiRedactor>();
+        return services;
     }
 
     /// <summary>
@@ -40,6 +52,6 @@ public static class AiGuardServiceCollectionExtensions
     /// <returns>The same <paramref name="app"/> for chaining.</returns>
     public static IApplicationBuilder UseAiGuard(this IApplicationBuilder app)
     {
-        throw new NotImplementedException();
+        return app.UseMiddleware<AiGuardMiddleware>();
     }
 }
