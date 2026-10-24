@@ -160,6 +160,40 @@ Signal spans index into the **normalized** text, not the original, and the norma
 same length. This matters in one place: with `OnInjection = Sanitize`, the middleware removes the matched spans
 from the normalized copy, so the forwarded body is normalized text rather than the original bytes.
 
+## PII categories
+
+`RedactCategories` takes any combination of `PiiCategory` flags. `All` is the union of every flag below.
+
+Each detected entity is replaced with `[<CATEGORY>_<n>]`, where `<CATEGORY>` is the flag name upper-cased and
+`<n>` counts from 1 per category within a single call. Built-in and custom patterns share the same counters.
+
+| Flag | Example input | Placeholder | Detection notes |
+|------|---------------|-------------|-----------------|
+| `Email` | `john.doe@example.com` | `[EMAIL_1]` | Bounded local part and domain labels, alphabetic TLD. |
+| `Phone` | `+49 178 5729777` | `[PHONE_1]` | Candidate runs of digits, checked for 7 to 15 digits; dotted IPv4 addresses are excluded. |
+| `CreditCard` | `4111 1111 1111 1111` | `[CREDITCARD_1]` | 13 to 19 digits, optional single space or dash between digits, Luhn-checked. |
+| `Iban` | `DE89 3704 0044 0532 0130 00` | `[IBAN_1]` | Country code, check digits and 11 to 30 alphanumerics; checksum-validated. |
+| `IpAddress` | `192.168.1.10`, `2001:db8::1` | `[IPADDRESS_1]`, `[IPADDRESS_2]` | IPv4 and IPv6, validated with `IPAddress.TryParse`. |
+| `NationalId` | `65929970489` (German Steuer-ID), `7523169263` (Bulgarian EGN), `123-45-6789` (US SSN form) | `[NATIONALID_1]` | Steuer-ID and EGN are checksum-validated; the SSN pattern checks the format only. See [Limitations](#limitations) for overlaps with `Phone`. |
+| `PersonName` | `Anna Schmidt` | `[PERSONNAME_1]` | **No built-in recognizer.** Flag has no effect until you add a `PiiPattern` or a custom `IPiiRedactor`. |
+
+## GuardAction semantics
+
+`OnInjection` decides what the middleware does after `IPromptInjectionDetector` reports `IsInjection == true`.
+PII redaction runs afterwards for requests that reach that step, using the same body the action left behind.
+
+| Action | Body passed to the handler | Response status | `HttpContext.Items` |
+|--------|---------------------------|-----------------|---------------------|
+| `Block` | Not forwarded. The pipeline short-circuits and no PII redaction runs. | `BlockedStatusCode` (default `400`), `Content-Type: application/json`, body `{"error":"prompt_injection_detected"}` | Nothing is stored. The verdict is only logged (warning). |
+| `Flag` | The original text, with PII redacted if enabled. | Whatever the handler returns. | `AiGuardMiddleware.VerdictItemKey` holds the `InjectionVerdict`. |
+| `Sanitize` | The normalized text (see [How detection works](#how-detection-works)) with every matched span removed, then PII redacted. | Whatever the handler returns. | `VerdictItemKey` holds the `InjectionVerdict`. |
+
+In every case where a PII redaction takes place, `AiGuardMiddleware.RedactionItemKey` holds the `RedactionResult`.
+Requests that are clean are never modified by the injection step, but they are still redacted when PII is found.
+
+Bodies that are empty, larger than `MaxBodyBytes`, or outside `PathPrefixes` skip the middleware's logic entirely.
+Their status and `Items` are unchanged (see [Limitations](#limitations)).
+
 ## Standalone usage
 
 `IPromptInjectionDetector` and `IPiiRedactor` work without the middleware, for example in background jobs or
@@ -208,9 +242,148 @@ var restored = PlaceholderRehydrator.Rehydrate(llmReply, original, redacted);
 `Rehydrate` takes the entity spans from the redaction result and reads the values from `original`, so pass the
 same string that was given to `RedactAsync`. Placeholders that are not in the result are left untouched.
 
+## Extending
+
+### Custom injection rule
+
+`AddRule` appends an `InjectionRule` to the built-in set. Its weight enters the same noisy-OR score as the
+built-in rules, so a single match of a weight-0.8 rule already crosses the default threshold of 0.7.
+
+```csharp
+builder.Services
+    .AddAiGuard()
+    .AddRule(new InjectionRule(
+        ruleId: "INJ-900",                          // stable id; pick one that does not clash with INJ-001..INJ-010
+        description: "Internal jailbreak phrase",   // shown in InjectionSignal.Description
+        weight: 0.8,                                // [0, 1]; contribution of each match
+        pattern: @"\bopen\s+sesame\b"));            // compiled with IgnoreCase, CultureInvariant, 250 ms timeout
+```
+
+Keep patterns linear: bounded quantifiers, no nested unbounded groups. A match that runs past the 250 ms
+timeout throws `RegexMatchTimeoutException`, and the middleware does not catch it.
+
+### Custom PII pattern with a validator
+
+A `PiiPattern` targets exactly one `PiiCategory` flag. The optional `validator` receives each regex match
+(for example `EMP-123456`, not the surrounding text) and keeps it only when it returns `true`.
+
+```csharp
+var employeeId = new PiiPattern(
+    PiiCategory.NationalId,
+    @"(?<![\w-])EMP-\d{6}(?![\w-])",
+    validator: match => match[4] != '0');   // accept only IDs whose first digit is non-zero
+
+builder.Services
+    .AddAiGuard()
+    .AddPiiPattern(employeeId);
+```
+
+`PiiCategory` is a closed enum, so a custom pattern reuses an existing category and its placeholder
+(`[NATIONALID_1]` above). A category of its own needs a custom `IPiiRedactor`.
+
+### Replacing the detector or the redactor
+
+Both services are resolved from DI. `UseDetector<T>()` and `UseRedactor<T>()` replace the default
+registration; `T` is registered as a singleton, so its dependencies must be singletons too (or resolved from the root).
+
+A custom detector, for example one backed by an ML classifier:
+
+```csharp
+public sealed class ClassifierInjectionDetector : IPromptInjectionDetector
+{
+    private readonly IInjectionClassifier _classifier;   // your model wrapper, not part of AiGuard
+    private readonly IOptionsMonitor<AiGuardOptions> _options;
+
+    public ClassifierInjectionDetector(IInjectionClassifier classifier, IOptionsMonitor<AiGuardOptions> options)
+    {
+        _classifier = classifier;
+        _options = options;
+    }
+
+    public async ValueTask<InjectionVerdict> DetectAsync(string text, CancellationToken cancellationToken = default)
+    {
+        var score = await _classifier.ScoreAsync(text, cancellationToken);   // in [0, 1]
+        var signal = new InjectionSignal("ML-001", "Classifier score", score, Span: null);
+
+        return new InjectionVerdict(score >= _options.CurrentValue.InjectionThreshold, score, [signal]);
+    }
+}
+
+builder.Services.AddSingleton<IInjectionClassifier, OnnxInjectionClassifier>();
+builder.Services
+    .AddAiGuard()
+    .UseDetector<ClassifierInjectionDetector>();
+```
+
+Things to know when you replace the detector:
+
+- `IsInjection` is yours to set. The middleware reads it directly and does not recompute it from the score.
+- `AddRule` rules are **not** run by a custom detector unless your detector consumes them, for example by taking `IEnumerable<InjectionRule>`.
+- `Sanitize` removes spans from `InjectionTextNormalizer.Normalize(body)`. Return spans relative to that string,
+  or `null`. A signal with a `null` span is skipped by `Sanitize`, so nothing is removed for it.
+
+A custom redactor, for example one that finds person names with an NER model:
+
+```csharp
+public sealed class NerPiiRedactor : IPiiRedactor
+{
+    private readonly IOptionsMonitor<AiGuardOptions> _options;
+
+    public NerPiiRedactor(IOptionsMonitor<AiGuardOptions> options) => _options = options;
+
+    public async ValueTask<RedactionResult> RedactAsync(string text, CancellationToken cancellationToken = default)
+    {
+        var enabled = _options.CurrentValue.RedactCategories;
+        var found = new List<(TextSpan Span, PiiCategory Category)>();
+
+        if (enabled.HasFlag(PiiCategory.PersonName))
+        {
+            found.AddRange(await FindPersonNamesAsync(text, cancellationToken));   // your NER call
+        }
+
+        // Your code: sort by start, drop overlaps, replace each span with [CATEGORY_n] and record a PiiEntity
+        // with the same span, as RegexPiiRedactor does. PlaceholderRehydrator depends on both.
+        return BuildResult(text, found);
+    }
+}
+
+builder.Services
+    .AddAiGuard()
+    .UseRedactor<NerPiiRedactor>();
+```
+
+`UseRedactor` replaces `RegexPiiRedactor` completely, so the built-in and `AddPiiPattern` recognizers stop running.
+If you still need them, call a `RegexPiiRedactor` from your class or move your logic into a pattern.
+Your redactor is also responsible for honouring `RedactCategories`; the middleware only skips the call when the
+value is `None`.
+
+## Limitations
+
+- **Regex-based, not semantic.** The default detector matches fixed patterns and a heuristic noisy-OR score.
+  Paraphrases, obfuscation beyond the normalizer's steps (see [How detection works](#how-detection-works)) and
+  attacks that do not use the listed phrases are missed. The threshold is not calibrated against a corpus.
+- **English-centric.** The built-in injection rules are English phrases. A German or Ukrainian injection passes
+  unless you add rules for that language. The normalizer folds Cyrillic homoglyphs to Latin letters but does not translate.
+- **Person names are not detected by default.** `PiiCategory.PersonName` is part of `All`, but no built-in pattern
+  targets it. Only a custom `PiiPattern` or a custom `IPiiRedactor` produces `PersonName` entities.
+- **Oversized bodies pass through.** A request body larger than `MaxBodyBytes` (UTF-8 bytes, default 1 MiB) is
+  forwarded unmodified and unscanned, with a warning logged. Raise the limit only if you accept buffering that much
+  in memory, and enforce a smaller request-size limit at the server or proxy if you need a hard cap.
+- **Whole body is scanned.** `InspectedFields` is not applied yet, so JSON keys and metadata are scanned along with
+  message content. This can produce false positives and redact PII that is outside the prompt.
+- **`Sanitize` changes more than the matches.** The forwarded body is the normalized text with matched spans removed,
+  so NFKC folding, zero-width removal and whitespace collapsing also apply to the whole body.
+- **Overlapping PII matches resolve by position, not by category.** The earlier match wins; for equal starts the
+  longer one wins. When two recognizers produce the same span, which category is reported is not specified. With
+  `Phone` enabled, a bare 10- or 11-digit value such as a German Steuer-ID, a Bulgarian EGN or an SSN-shaped number is
+  reported as `[PHONE_1]`. Use `RedactCategories` without `Phone` if you need `[NATIONALID_1]` for these values.
+- **Methods and content types are limited.** Only `POST`, `PUT` and `PATCH` bodies are inspected. Response redaction
+  (`RedactResponses`) covers only `application/json` and `text/*` and buffers the entire response in memory.
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+New detection rules and PII categories should start with an issue so the rule id can be reserved. The
+workflow, fixture requirements, ReDoS rules and style guide are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
